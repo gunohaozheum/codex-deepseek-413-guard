@@ -17,7 +17,9 @@ function close(server) {
 }
 
 test("health endpoint identifies the guard", async () => {
+  const expectedMaxRequestBytes = 1024;
   const server = createGuardServer({
+    maxRequestBytes: expectedMaxRequestBytes,
     pruneAtBytes: 128,
     hardLimitBytes: 256,
   });
@@ -26,6 +28,7 @@ test("health endpoint identifies the guard", async () => {
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.service, "codex-deepseek-413-guard");
+  assert.equal(body.maxRequestBytes, expectedMaxRequestBytes);
   await close(server);
 });
 
@@ -66,6 +69,40 @@ test("oversized current-turn content is rejected before the upstream", async () 
     }),
   });
   assert.equal(response.status, 413);
+  assert.equal(upstreamCalls, 0);
+
+  await close(server);
+  await close(upstream);
+});
+
+test("transport-level request limit returns a normal 413 response", async () => {
+  let upstreamCalls = 0;
+  const upstream = http.createServer((_req, res) => {
+    upstreamCalls += 1;
+    res.end("{}");
+  });
+  const upstreamPort = await listen(upstream);
+  const server = createGuardServer({
+    upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}`,
+    maxRequestBytes: 128,
+    pruneAtBytes: 256,
+    hardLimitBytes: 512,
+    isPaused: () => false,
+  });
+  const port = await listen(server);
+
+  const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer test-only",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ text: "A".repeat(1024) }),
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 413);
+  assert.equal(body.error.type, "request_too_large");
   assert.equal(upstreamCalls, 0);
 
   await close(server);

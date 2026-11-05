@@ -127,7 +127,7 @@ Codex
   "host": "127.0.0.1",
   "port": 18766,
   "upstreamBaseUrl": "https://api.deepseek.com",
-  "maxRequestMiB": 64,
+  "maxRequestMiB": 128,
   "pruneAtMiB": 44,
   "hardLimitMiB": 47,
   "upstreamTimeoutMinutes": 15
@@ -179,8 +179,8 @@ Invoke-RestMethod http://127.0.0.1:18766/health
 node --test
 ```
 
-测试覆盖历史图片修剪、当前轮超限拦截、远程图片保留、暂停透传、配置切换和
-健康接口，共 11 项。
+测试覆盖历史图片修剪、当前轮超限拦截、传输层超限响应、远程图片保留、
+暂停透传、配置切换和健康接口，共 12 项。
 
 ## 隐私与安全
 

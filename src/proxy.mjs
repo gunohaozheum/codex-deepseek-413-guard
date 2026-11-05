@@ -46,21 +46,36 @@ function readBody(req, maxRequestBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
-    req.on("data", (chunk) => {
+    let settled = false;
+
+    const onData = (chunk) => {
+      if (settled) return;
       total += chunk.length;
       if (total > maxRequestBytes) {
+        settled = true;
+        req.removeListener("data", onData);
+        req.pause();
         reject(
           new Error(
             `Request body exceeds the local ${(maxRequestBytes / MEBIBYTE).toFixed(2)} MiB safety limit.`,
           ),
         );
-        req.destroy();
         return;
       }
       chunks.push(chunk);
+    };
+
+    req.on("data", onData);
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
     });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -115,6 +130,7 @@ export function createGuardServer(options = {}) {
         service: "codex-deepseek-413-guard",
         pid: process.pid,
         paused: paused(settings),
+        maxRequestBytes: settings.maxRequestBytes,
         pruneAtBytes: settings.pruneAtBytes,
         hardLimitBytes: settings.hardLimitBytes,
       });
@@ -135,6 +151,7 @@ export function createGuardServer(options = {}) {
     try {
       bodyBuffer = await readBody(req, settings.maxRequestBytes);
     } catch (error) {
+      res.once("finish", () => req.destroy());
       json(res, 413, {
         error: { message: error.message, type: "request_too_large" },
       });

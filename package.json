@@ -1,0 +1,15 @@
+{
+  "name": "codex-deepseek-413-guard",
+  "version": "1.0.0",
+  "description": "A local, reversible request-size guard for Codex using the official DeepSeek Responses API.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/proxy.mjs",
+    "test": "node --test",
+    "status": "node src/configure.mjs status"
+  }
+}

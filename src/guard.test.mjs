@@ -54,7 +54,7 @@ test("prunes historical inline images and preserves the current turn", () => {
   assert.equal(body.input[0].content[1].image_url, oldImage);
 });
 
-test("does not strip remote images or small requests", () => {
+test("prunes historical remote images even for small requests", () => {
   const body = {
     input: [
       {
@@ -78,12 +78,41 @@ test("does not strip remote images or small requests", () => {
   const small = pruneHistoricalInlineImages(body, {
     pruneAtBytes: 1024 * 1024,
   });
-  assert.equal(small.changed, false);
-
-  const remoteOnly = pruneHistoricalInlineImages(body, {
-    pruneAtBytes: 1,
+  assert.equal(small.changed, true);
+  assert.deepEqual(small.body.input[0].content[0], {
+    type: "input_text",
+    text: HISTORY_IMAGE_PLACEHOLDER,
   });
-  assert.equal(remoteOnly.changed, false);
+});
+
+test("limits current-turn images to the configured count", () => {
+  const images = [1, 2, 3].map((number) => ({
+    type: "input_image",
+    image_url: `data:image/png;base64,${String(number).repeat(128)}`,
+  }));
+  const body = {
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "current" }, ...images],
+      },
+    ],
+  };
+
+  const result = pruneHistoricalInlineImages(body, {
+    pruneAtBytes: 1024 * 1024,
+    hardLimitBytes: 2 * 1024 * 1024,
+    maxCurrentImages: 2,
+  });
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.body.input[0].content[1], {
+    type: "input_text",
+    text: HISTORY_IMAGE_PLACEHOLDER,
+  });
+  assert.equal(result.body.input[0].content[2], images[1]);
+  assert.equal(result.body.input[0].content[3], images[2]);
 });
 
 test("the disable switch bypasses pruning", () => {

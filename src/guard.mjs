@@ -1,48 +1,51 @@
 const MEBIBYTE = 1024 * 1024;
 
 export const HISTORY_IMAGE_PLACEHOLDER =
-  "[Historical image omitted by Codex DeepSeek 413 Guard. The current user turn and its images are preserved.]";
+  "[Image omitted by Codex DeepSeek 413 Guard to reduce repeated image-token cost or satisfy the request-size limit.]";
 
-function inlineImagePayloadChars(part) {
-  if (!part || typeof part !== "object" || part.type !== "input_image") {
-    return 0;
-  }
+function imagePartSize(part) {
+  if (!part || typeof part !== "object" || part.type !== "input_image") return 0;
   return [part.image_url, part.url].reduce((total, value) => {
-    return typeof value === "string" && value.startsWith("data:image/")
-      ? total + value.length
-      : total;
-  }, 0);
+    return typeof value === "string" ? total + value.length : total;
+  }, typeof part.file_id === "string" ? part.file_id.length : 1);
 }
 
-function stripInlineImages(value, stats) {
+function collectImageParts(value, output) {
+  if (Array.isArray(value)) {
+    for (const entry of value) collectImageParts(entry, output);
+    return output;
+  }
+  if (!value || typeof value !== "object") return output;
+  if (value.type === "input_image") {
+    output.push(value);
+    return output;
+  }
+  for (const entry of Object.values(value)) collectImageParts(entry, output);
+  return output;
+}
+
+function replaceImageParts(value, targets, stats) {
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((entry) => {
-      const stripped = stripInlineImages(entry, stats);
-      changed ||= stripped !== entry;
-      return stripped;
+      const replaced = replaceImageParts(entry, targets, stats);
+      changed ||= replaced !== entry;
+      return replaced;
     });
     return changed ? next : value;
   }
-
   if (!value || typeof value !== "object") return value;
-
-  const payloadChars = inlineImagePayloadChars(value);
-  if (payloadChars > 0) {
+  if (value.type === "input_image" && targets.has(value)) {
     stats.prunedImages += 1;
-    stats.prunedPayloadChars += payloadChars;
-    return {
-      type: "input_text",
-      text: HISTORY_IMAGE_PLACEHOLDER,
-    };
+    stats.prunedPayloadChars += imagePartSize(value);
+    return { type: "input_text", text: HISTORY_IMAGE_PLACEHOLDER };
   }
-
   let changed = false;
   const next = { ...value };
   for (const [key, entry] of Object.entries(value)) {
-    const stripped = stripInlineImages(entry, stats);
-    if (stripped !== entry) {
-      next[key] = stripped;
+    const replaced = replaceImageParts(entry, targets, stats);
+    if (replaced !== entry) {
+      next[key] = replaced;
       changed = true;
     }
   }
@@ -51,7 +54,12 @@ function stripInlineImages(value, stats) {
 
 export function pruneHistoricalInlineImages(
   body,
-  { enabled = true, pruneAtBytes = 44 * MEBIBYTE } = {},
+  {
+    enabled = true,
+    pruneAtBytes = 44 * MEBIBYTE,
+    hardLimitBytes = 47 * MEBIBYTE,
+    maxCurrentImages = 2,
+  } = {},
 ) {
   const beforeBytes = Buffer.byteLength(JSON.stringify(body));
   const unchanged = {
@@ -64,7 +72,7 @@ export function pruneHistoricalInlineImages(
     prunedPayloadChars: 0,
   };
 
-  if (!enabled || beforeBytes <= pruneAtBytes || !Array.isArray(body?.input)) {
+  if (!enabled || !Array.isArray(body?.input)) {
     return unchanged;
   }
 
@@ -81,14 +89,58 @@ export function pruneHistoricalInlineImages(
     prunedImages: 0,
     prunedPayloadChars: 0,
   };
-  const input = body.input.map((item, index) => {
+  const historicalImages = new Set();
+  for (let index = 0; index < lastUserMessageIndex; index += 1) {
+    for (const image of collectImageParts(body.input[index], [])) {
+      historicalImages.add(image);
+    }
+  }
+
+  let input = body.input.map((item, index) => {
     return index < lastUserMessageIndex
-      ? stripInlineImages(item, stats)
+      ? replaceImageParts(item, historicalImages, stats)
       : item;
   });
-  if (stats.prunedImages === 0) return unchanged;
+  let prunedBody = { ...body, input };
+  let currentBytes = Buffer.byteLength(JSON.stringify(prunedBody));
 
-  const prunedBody = { ...body, input };
+  const currentImages = [];
+  for (let index = lastUserMessageIndex; index < input.length; index += 1) {
+    currentImages.push(...collectImageParts(input[index], []));
+  }
+  const allowedCurrentImages =
+    currentBytes > pruneAtBytes ? 1 : Math.max(0, maxCurrentImages);
+  const excessCurrentImages = new Set(
+    currentImages.slice(0, Math.max(0, currentImages.length - allowedCurrentImages)),
+  );
+  if (excessCurrentImages.size > 0) {
+    input = input.map((item, index) => {
+      return index < lastUserMessageIndex
+        ? item
+        : replaceImageParts(item, excessCurrentImages, stats);
+    });
+    prunedBody = { ...body, input };
+    currentBytes = Buffer.byteLength(JSON.stringify(prunedBody));
+  }
+
+  if (currentBytes > hardLimitBytes) {
+    const remainingCurrentImages = new Set();
+    for (let index = lastUserMessageIndex; index < input.length; index += 1) {
+      for (const image of collectImageParts(input[index], [])) {
+        remainingCurrentImages.add(image);
+      }
+    }
+    if (remainingCurrentImages.size > 0) {
+      input = input.map((item, index) => {
+        return index < lastUserMessageIndex
+          ? item
+          : replaceImageParts(item, remainingCurrentImages, stats);
+      });
+      prunedBody = { ...body, input };
+    }
+  }
+
+  if (stats.prunedImages === 0) return unchanged;
   return {
     body: prunedBody,
     changed: true,

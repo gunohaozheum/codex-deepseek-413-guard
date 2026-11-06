@@ -25,10 +25,11 @@ test("health endpoint identifies the guard", async () => {
   assert.equal(response.status, 200);
   assert.equal(body.service, "codex-deepseek-413-guard");
   assert.equal(body.maxRequestBytes, expectedMaxRequestBytes);
+  assert.equal(body.maxCurrentImages, 2);
   await close(server);
 });
 
-test("oversized current-turn content is rejected before the upstream", async () => {
+test("untrimmed oversized text is rejected before the upstream", async () => {
   let upstreamCalls = 0;
   const upstream = http.createServer((_req, res) => {
     upstreamCalls += 1;
@@ -54,18 +55,65 @@ test("oversized current-turn content is rejected before the upstream", async () 
         {
           type: "message",
           role: "user",
-          content: [
-            {
-              type: "input_image",
-              image_url: `data:image/png;base64,${"A".repeat(1024)}`,
-            },
-          ],
+          content: [{ type: "input_text", text: "A".repeat(1024) }],
         },
       ],
     }),
   });
   assert.equal(response.status, 413);
   assert.equal(upstreamCalls, 0);
+
+  await close(server);
+  await close(upstream);
+});
+
+test("oversized current-turn images are pruned before forwarding", async () => {
+  let received = "";
+  const upstream = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      received = Buffer.concat(chunks).toString("utf8");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  const server = createGuardServer({
+    upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}`,
+    maxRequestBytes: 16 * 1024,
+    pruneAtBytes: 512,
+    hardLimitBytes: 1024,
+    maxCurrentImages: 2,
+    isPaused: () => false,
+  });
+  const port = await listen(server);
+
+  const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer test-only",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "deepseek-flash",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: `data:image/png;base64,${"A".repeat(4096)}`,
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(received.includes("data:image/"), false);
 
   await close(server);
   await close(upstream);

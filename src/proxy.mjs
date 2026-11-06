@@ -27,6 +27,10 @@ const PRUNE_AT_BYTES =
 const HARD_LIMIT_BYTES =
   Number(process.env.DEEPSEEK_GUARD_HARD_LIMIT_BYTES) ||
   Number(SETTINGS.hardLimitMiB) * MEBIBYTE;
+const MAX_CURRENT_IMAGES =
+  Number(process.env.DEEPSEEK_GUARD_MAX_CURRENT_IMAGES) ||
+  Number(SETTINGS.maxCurrentImages ??
+    2);
 const UPSTREAM_TIMEOUT_MS =
   Number(SETTINGS.upstreamTimeoutMinutes) * 60 * 1000;
 const PAUSE_FLAG_PATH = path.join(ROOT, "runtime", "paused.flag");
@@ -111,6 +115,7 @@ export function createGuardServer(options = {}) {
     maxRequestBytes: options.maxRequestBytes ?? MAX_REQUEST_BYTES,
     pruneAtBytes: options.pruneAtBytes ?? PRUNE_AT_BYTES,
     hardLimitBytes: options.hardLimitBytes ?? HARD_LIMIT_BYTES,
+    maxCurrentImages: options.maxCurrentImages ?? MAX_CURRENT_IMAGES,
     upstreamTimeoutMs:
       options.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
     pauseFlagPath: options.pauseFlagPath ?? PAUSE_FLAG_PATH,
@@ -133,6 +138,7 @@ export function createGuardServer(options = {}) {
         maxRequestBytes: settings.maxRequestBytes,
         pruneAtBytes: settings.pruneAtBytes,
         hardLimitBytes: settings.hardLimitBytes,
+        maxCurrentImages: settings.maxCurrentImages,
       });
       return;
     }
@@ -186,6 +192,8 @@ export function createGuardServer(options = {}) {
     const guard = pruneHistoricalInlineImages(body, {
       enabled: !paused(settings),
       pruneAtBytes: settings.pruneAtBytes,
+      hardLimitBytes: settings.hardLimitBytes,
+      maxCurrentImages: settings.maxCurrentImages,
     });
     body = guard.body;
     const serializedBody = JSON.stringify(body);

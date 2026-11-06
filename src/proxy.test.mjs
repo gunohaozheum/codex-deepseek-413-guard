@@ -17,12 +17,8 @@ function close(server) {
 }
 
 test("health endpoint identifies the guard", async () => {
-  const expectedMaxRequestBytes = 1024;
-  const server = createGuardServer({
-    maxRequestBytes: expectedMaxRequestBytes,
-    pruneAtBytes: 128,
-    hardLimitBytes: 256,
-  });
+  const expectedMaxRequestBytes = 256 * 1024 * 1024;
+  const server = createGuardServer();
   const port = await listen(server);
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   const body = await response.json();

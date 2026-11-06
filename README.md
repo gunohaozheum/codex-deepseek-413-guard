@@ -127,7 +127,7 @@ Codex
   "host": "127.0.0.1",
   "port": 18766,
   "upstreamBaseUrl": "https://api.deepseek.com",
-  "maxRequestMiB": 128,
+  "maxRequestMiB": 256,
   "pruneAtMiB": 44,
   "hardLimitMiB": 47,
   "upstreamTimeoutMinutes": 15
